@@ -248,6 +248,45 @@ if not resultado.empty:
             st.markdown(f"🌍 **Coordenada atual:** {lat}, {lon}")
             url_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
             st.link_button("🗺️ Abrir no Google Maps", url_maps, type="primary", use_container_width=True)
+
+            # Seção para editar coordenada existente
+            st.markdown("#### ✏️ Editar coordenada")
+            opcao_editar = st.radio(
+                "Escolha o método:",
+                ["Capturar GPS do dispositivo", "Inserir manualmente"],
+                key=f"opcao_editar_{row['UC']}"
+            )
+
+            if opcao_editar == "Capturar GPS do dispositivo":
+                loc = get_geolocation()
+                if loc:
+                    new_lat, new_lon = loc["coords"]["latitude"], loc["coords"]["longitude"]
+                    st.success(f"Coordenada detectada: ({new_lat}, {new_lon})")
+                    if st.button("Salvar coordenada", key=f"gps_editar_{row['UC']}"):
+                        df.loc[df["UC"] == row["UC"], ["Latitude", "Longitude", "Link"]] = [new_lat, new_lon, ""]
+                        salvar_dados(df)
+                        st.success("Coordenada atualizada com sucesso!")
+            else:
+                coord_input_edit = st.text_input(
+                    "Cole o link do Google Maps ou coordenada:",
+                    key=f"manual_editar_{row['UC']}"
+                )
+                if st.button("Salvar coordenada", key=f"salvar_editar_{row['UC']}"):
+                    new_lat, new_lon = extrair_coordenadas(coord_input_edit)
+                    if new_lat is not None and new_lon is not None:
+                        # Atualiza coordenadas e limpa link
+                        df.loc[df["UC"] == row["UC"], ["Latitude", "Longitude", "Link"]] = [new_lat, new_lon, ""]
+                        salvar_dados(df)
+                        st.success("Coordenada atualizada com sucesso!")
+                    else:
+                        # Se não extraiu coordenadas, tenta salvar/atualizar o link
+                        link_novo = extrair_link_maps(coord_input_edit)
+                        if link_novo:
+                            df.loc[df["UC"] == row["UC"], ["Link"]] = [link_novo]
+                            salvar_dados(df)
+                            st.success("Link atualizado com sucesso! (Coordenadas atuais mantidas)")
+                        else:
+                            st.error("Formato inválido. Insira coordenadas (decimal/DMS) ou um link válido do Google Maps.")
         else:
             st.warning("⚠️ Sem coordenada registrada para esta unidade.")
 
