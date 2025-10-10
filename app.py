@@ -359,13 +359,13 @@ if not resultado.empty:
                         else:
                             st.error("Formato inválido. Insira um link do Google Maps ou coordenadas (decimal/DMS) válidas.")
         else:
-            st.warning("⚠️ Sem coordenada registrada para esta unidade.")
-
-            # Se houver link salvo, exibe botão para abrir diretamente
+            # Sem coordenadas numericas; checa se ha link salvo para ajustar a mensagem
             link_salvo = row.get("Link")
             if isinstance(link_salvo, str) and link_salvo.strip() != "":
+                st.info("ℹ️ Sem coordenadas numéricas cadastradas. Há um link do Google Maps salvo.")
                 st.link_button("🗺️ Abrir no Google Maps (link salvo)", link_salvo.strip(), type="primary", use_container_width=True)
             else:
+                st.warning("⚠️ Sem localização cadastrada. Informe coordenadas ou salve um link do Google Maps.")
                 # Botão para pesquisar pelo endereço no Google Maps
                 endereco_busca = f"{row['Endereço']} {row['Cidade']}".strip()
                 if endereco_busca and endereco_busca != "":
