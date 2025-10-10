@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import os
 import math
+from typing import Optional
 from unidecode import unidecode
 from urllib.parse import unquote, quote_plus
 from streamlit_js_eval import get_geolocation
@@ -107,7 +108,7 @@ def extrair_coordenadas(texto):
 
     return None, None
 
-def extrair_link_maps(texto: str) -> str | None:
+def extrair_link_maps(texto: str) -> Optional[str]:
     """Retorna a URL se o texto parecer um link do Google Maps (inclui encurtadores maps.app.goo.gl).
     Caso contrário, retorna None.
     """
@@ -161,7 +162,7 @@ map_exato = {
 }
 
 # Heurísticas por conteúdo (contém palavras)
-def _heuristica(norm: str) -> str | None:
+def _heuristica(norm: str) -> Optional[str]:
     if "latitude" in norm:
         return "Latitude"
     if "longitude" in norm:
@@ -214,14 +215,48 @@ cidade = st.selectbox("Selecione a cidade", opcoes_cidade, index=0)
 
 # Campo de busca automática
 st.subheader("🔎 Localizar cliente")
-busca = st.text_input("Digite o número do medidor ou da unidade consumidora")
+
+# Estado da busca para melhor UX no mobile: campo de entrada e valor efetivamente pesquisado
+if "busca_input" not in st.session_state:
+    st.session_state["busca_input"] = ""
+if "busca_ativa" not in st.session_state:
+    st.session_state["busca_ativa"] = ""
+
+st.session_state["busca_input"] = st.text_input(
+    "Digite o número do medidor ou da unidade consumidora",
+    value=st.session_state.get("busca_input", ""),
+    key="busca_box"
+)
+
+cols_busca = st.columns(2)
+with cols_busca[0]:
+    pesquisar_clicked = st.button("Pesquisar", type="primary", use_container_width=True)
+with cols_busca[1]:
+    limpar_clicked = st.button("Limpar", use_container_width=True)
+
+if pesquisar_clicked:
+    st.session_state["busca_ativa"] = str(st.session_state.get("busca_input", "")).strip()
+    # Rerun para refletir a pesquisa
+    st.rerun()
+
+if limpar_clicked:
+    st.session_state["busca_input"] = ""
+    st.session_state["busca_ativa"] = ""
+    st.rerun()
+
+busca_text = st.session_state.get("busca_ativa", "").strip()
+
+# Filtro por status de localização
+st.subheader("🔖 Status da localização")
+opcoes_status = ["Todos", "Com coordenadas", "Com link apenas", "Sem dados"]
+status_sel = st.selectbox("Filtrar por status", opcoes_status, index=0)
 
 # =====================================
 # RESULTADO DA BUSCA
 # =====================================
 resultado = pd.DataFrame()
 
-if busca:
+if busca_text:
     # Se "Todas" for selecionada, não filtra por cidade
     if cidade == "Todas":
         filtro_cidade = pd.Series([True] * len(df))
@@ -229,19 +264,46 @@ if busca:
         filtro_cidade = (df["Cidade"] == cidade)
 
     filtro_busca = (
-        df["UC"].astype(str).str.contains(busca.strip(), case=False, na=False) |
-        df["Medidor"].astype(str).str.contains(busca.strip(), case=False, na=False)
+        df["UC"].astype(str).str.contains(busca_text, case=False, na=False) |
+        df["Medidor"].astype(str).str.contains(busca_text, case=False, na=False)
     )
 
-    resultado = df[filtro_cidade & filtro_busca]
+    base = df[filtro_cidade & filtro_busca].copy()
+
+    # Aplica filtro de status
+    has_lat = base["Latitude"].astype(str).str.strip() != ""
+    has_lon = base["Longitude"].astype(str).str.strip() != ""
+    has_coord = has_lat & has_lon
+    has_link = base["Link"].astype(str).str.strip() != ""
+
+    if status_sel == "Com coordenadas":
+        resultado = base[has_coord]
+    elif status_sel == "Com link apenas":
+        resultado = base[has_link & (~has_coord)]
+    elif status_sel == "Sem dados":
+        resultado = base[(~has_link) & (~has_coord)]
+    else:
+        resultado = base
 
 if not resultado.empty:
-    for _, row in resultado.iterrows():
+    for idx, row in resultado.iterrows():
         st.markdown("---")
         st.markdown(f"### 👤 {row['Cliente']}")
         st.markdown(f"**Medidor:** {row['Medidor']}  |  **UC:** {row['UC']}")
         st.markdown(f"**Endereço:** {row['Endereço']}")
         st.markdown(f"**Cidade:** {row['Cidade']}")
+
+        # Badge de status
+        has_lat = str(row.get("Latitude", "")).strip() != ""
+        has_lon = str(row.get("Longitude", "")).strip() != ""
+        has_coord = has_lat and has_lon
+        has_link = isinstance(row.get("Link", ""), str) and row.get("Link", "").strip() != ""
+        if has_coord:
+            st.markdown("✅ Status: Com coordenadas")
+        elif has_link:
+            st.markdown("🔗 Status: Com link apenas")
+        else:
+            st.markdown("⬜ Status: Sem dados")
 
         lat, lon = row.get("Latitude"), row.get("Longitude")
         if pd.notna(lat) and pd.notna(lon) and not (str(lat).strip() == "" or str(lon).strip() == ""):
@@ -249,12 +311,17 @@ if not resultado.empty:
             url_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
             st.link_button("🗺️ Abrir no Google Maps", url_maps, type="primary", use_container_width=True)
 
+            # Se houver um link salvo, exibe também o botão para abrir
+            link_salvo_existente = row.get("Link")
+            if isinstance(link_salvo_existente, str) and link_salvo_existente.strip() != "":
+                st.link_button("🗺️ Abrir link Google Maps (salvo)", link_salvo_existente.strip(), use_container_width=True)
+
             # Seção para editar coordenada existente
             st.markdown("#### ✏️ Editar coordenada")
             opcao_editar = st.radio(
                 "Escolha o método:",
                 ["Capturar GPS do dispositivo", "Inserir manualmente"],
-                key=f"opcao_editar_{row['UC']}"
+                key=f"opcao_editar_{idx}"
             )
 
             if opcao_editar == "Capturar GPS do dispositivo":
@@ -262,31 +329,35 @@ if not resultado.empty:
                 if loc:
                     new_lat, new_lon = loc["coords"]["latitude"], loc["coords"]["longitude"]
                     st.success(f"Coordenada detectada: ({new_lat}, {new_lon})")
-                    if st.button("Salvar coordenada", key=f"gps_editar_{row['UC']}"):
+                    if st.button("Salvar coordenada", key=f"gps_editar_{idx}"):
                         df.loc[df["UC"] == row["UC"], ["Latitude", "Longitude", "Link"]] = [new_lat, new_lon, ""]
                         salvar_dados(df)
                         st.success("Coordenada atualizada com sucesso!")
+                        st.rerun()
             else:
                 coord_input_edit = st.text_input(
                     "Cole o link do Google Maps ou coordenada:",
-                    key=f"manual_editar_{row['UC']}"
+                    key=f"manual_editar_{idx}"
                 )
-                if st.button("Salvar coordenada", key=f"salvar_editar_{row['UC']}"):
-                    new_lat, new_lon = extrair_coordenadas(coord_input_edit)
-                    if new_lat is not None and new_lon is not None:
-                        # Atualiza coordenadas e limpa link
-                        df.loc[df["UC"] == row["UC"], ["Latitude", "Longitude", "Link"]] = [new_lat, new_lon, ""]
+                if st.button("Salvar coordenada", key=f"salvar_editar_{idx}"):
+                    # Prioriza tratar como LINK quando a UC ja possui coordenadas
+                    link_novo = extrair_link_maps(coord_input_edit)
+                    if link_novo:
+                        # Limpa coordenadas para evitar confusão e salva apenas o link
+                        df.loc[df["UC"] == row["UC"], ["Latitude", "Longitude", "Link"]] = ["", "", link_novo]
                         salvar_dados(df)
-                        st.success("Coordenada atualizada com sucesso!")
+                        st.success("Link salvo e coordenadas anteriores apagadas.")
+                        st.rerun()
                     else:
-                        # Se não extraiu coordenadas, tenta salvar/atualizar o link
-                        link_novo = extrair_link_maps(coord_input_edit)
-                        if link_novo:
-                            df.loc[df["UC"] == row["UC"], ["Link"]] = [link_novo]
+                        # Tenta interpretar como coordenadas (decimal ou DMS)
+                        new_lat, new_lon = extrair_coordenadas(coord_input_edit)
+                        if new_lat is not None and new_lon is not None:
+                            df.loc[df["UC"] == row["UC"], ["Latitude", "Longitude", "Link"]] = [new_lat, new_lon, ""]
                             salvar_dados(df)
-                            st.success("Link atualizado com sucesso! (Coordenadas atuais mantidas)")
+                            st.success("Coordenada atualizada com sucesso!")
+                            st.rerun()
                         else:
-                            st.error("Formato inválido. Insira coordenadas (decimal/DMS) ou um link válido do Google Maps.")
+                            st.error("Formato inválido. Insira um link do Google Maps ou coordenadas (decimal/DMS) válidas.")
         else:
             st.warning("⚠️ Sem coordenada registrada para esta unidade.")
 
@@ -302,26 +373,28 @@ if not resultado.empty:
                     st.link_button("🔎 Buscar endereço no Google Maps", url_maps_busca, use_container_width=True)
 
             st.markdown("#### ➕ Inserir coordenada")
-            opcao = st.radio("Escolha o método:", ["Capturar GPS do celular", "Inserir manualmente"], key=f"opcao_{row['UC']}")
+            opcao = st.radio("Escolha o método:", ["Capturar GPS do celular", "Inserir manualmente"], key=f"opcao_{idx}")
 
             if opcao == "Capturar GPS do celular":
                 loc = get_geolocation()
                 if loc:
                     lat, lon = loc["coords"]["latitude"], loc["coords"]["longitude"]
                     st.success(f"Coordenada detectada: ({lat}, {lon})")
-                    if st.button("Salvar coordenada", key=f"gps_{row['UC']}"):
+                    if st.button("Salvar coordenada", key=f"gps_{idx}"):
                         df.loc[df["UC"] == row["UC"], ["Latitude", "Longitude"]] = [lat, lon]
                         salvar_dados(df)
                         st.success("Coordenada salva com sucesso!")
+                        st.rerun()
 
             elif opcao == "Inserir manualmente":
-                coord_input = st.text_input("Cole o link do Google Maps ou coordenada:", key=f"manual_{row['UC']}")
-                if st.button("Salvar coordenada", key=f"salvar_{row['UC']}"):
+                coord_input = st.text_input("Cole o link do Google Maps ou coordenada:", key=f"manual_{idx}")
+                if st.button("Salvar coordenada", key=f"salvar_{idx}"):
                     lat, lon = extrair_coordenadas(coord_input)
                     if lat is not None and lon is not None:
                         df.loc[df["UC"] == row["UC"], ["Latitude", "Longitude", "Link"]] = [lat, lon, ""]
                         salvar_dados(df)
                         st.success("Coordenada salva com sucesso!")
+                        st.rerun()
                     else:
                         # Se não extraiu coordenadas, tenta salvar o link
                         link = extrair_link_maps(coord_input)
@@ -329,16 +402,17 @@ if not resultado.empty:
                             df.loc[df["UC"] == row["UC"], ["Link"]] = [link]
                             salvar_dados(df)
                             st.success("Link salvo com sucesso!")
+                            st.rerun()
                         else:
                             st.error("Formato inválido. Insira coordenadas ou um link válido do Google Maps.")
 else:
-    if busca != "":
+    if busca_text != "":
         if cidade == "Todas":
             st.warning("Cliente não encontrado.")
         else:
             st.warning("Cliente não encontrado nesta cidade.")
         if st.button("Cadastrar novo cliente"):
-            st.session_state["novo_cliente"] = busca
+            st.session_state["novo_cliente"] = busca_text
 
 # =====================================
 # CADASTRO DE NOVO CLIENTE
