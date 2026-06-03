@@ -112,6 +112,71 @@ def extrair_coordenadas(texto):
 
     return None, None
 
+
+def eh_url_maps(texto: str) -> bool:
+    if not texto:
+        return False
+
+    s = str(texto).strip()
+    padrao = re.compile(
+        r"^https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|(?:www\.)?google\.com(?:\.br)?/maps|maps\.google\.com(?:\.br)?)(?:[/?#].*)?$",
+        re.IGNORECASE,
+    )
+    return bool(padrao.match(s))
+
+
+def montar_url_maps(latitude=None, longitude=None, link_maps=None):
+    link = str(link_maps).strip() if link_maps is not None else ""
+    if link:
+        return link
+
+    lat = str(latitude).strip() if latitude is not None else ""
+    lon = str(longitude).strip() if longitude is not None else ""
+    if lat and lon:
+        return f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+
+    return None
+
+
+def resolver_localizacao_manual(texto: str):
+    mensagem_erro = (
+        "Não foi possível interpretar a localização. Informe coordenadas válidas ou cole um link do Google Maps."
+    )
+
+    s = str(texto or "").strip()
+    if not s:
+        return {
+            "latitude": None,
+            "longitude": None,
+            "link_maps": None,
+            "erro": mensagem_erro,
+        }
+
+    if eh_url_maps(s):
+        lat, lon = extrair_coordenadas(s)
+        return {
+            "latitude": lat,
+            "longitude": lon,
+            "link_maps": s,
+            "erro": None,
+        }
+
+    lat, lon = extrair_coordenadas(s)
+    if lat is None or lon is None:
+        return {
+            "latitude": None,
+            "longitude": None,
+            "link_maps": None,
+            "erro": mensagem_erro,
+        }
+
+    return {
+        "latitude": lat,
+        "longitude": lon,
+        "link_maps": None,
+        "erro": None,
+    }
+
 # =====================================
 # INTEGRAÇÃO SUPABASE - FUNÇÕES
 # =====================================
@@ -168,25 +233,37 @@ def buscar_unidades(cidade: str, termo: str) -> List[Dict]:
 
 
 def atualizar_coordenada(reg_id: int, latitude: float, longitude: float) -> bool:
+    return atualizar_localizacao(reg_id, latitude=latitude, longitude=longitude, link_maps=None)
+
+
+def atualizar_localizacao(
+    reg_id: int,
+    latitude=None,
+    longitude=None,
+    link_maps=None,
+) -> bool:
     try:
         agora = datetime.now(timezone.utc).isoformat()
-        supabase.table(TABELA).update({
+        payload = {
             "latitude": latitude,
             "longitude": longitude,
+            "link_maps": str(link_maps).strip() if link_maps else None,
             "atualizado_em": agora,
-        }).eq("id", reg_id).execute()
+        }
+        supabase.table(TABELA).update(payload).eq("id", reg_id).execute()
         return True
     except Exception as e:
-        st.error(f"Erro ao atualizar coordenada: {e}")
+        st.error(f"Erro ao atualizar localização: {e}")
         return False
 
 
-def atualizar_resultado_em_sessao(reg_id, latitude, longitude):
+def atualizar_resultado_em_sessao(reg_id, latitude=None, longitude=None, link_maps=None):
     resultados = st.session_state.get("resultados_pesquisa", [])
     for registro in resultados:
         if registro.get("id") == reg_id:
             registro["latitude"] = latitude
             registro["longitude"] = longitude
+            registro["link_maps"] = str(link_maps).strip() if link_maps else None
             registro["atualizado_em"] = datetime.now(timezone.utc).isoformat()
             break
     st.session_state["resultados_pesquisa"] = resultados
@@ -236,6 +313,7 @@ def cadastrar_unidade(dados: Dict) -> bool:
             "endereco": str(dados.get("endereco", "")).strip(),
             "latitude": dados.get("latitude"),
             "longitude": dados.get("longitude"),
+            "link_maps": str(dados.get("link_maps", "")).strip() or None,
         }
 
         resposta_insert = (
@@ -259,7 +337,7 @@ def cadastrar_unidade(dados: Dict) -> bool:
         resposta_confirmacao = (
             supabase
             .table(TABELA)
-            .select("id,cidade,uc,medidor,cliente")
+            .select("id,cidade,uc,medidor,cliente,latitude,longitude,link_maps")
             .eq("id", registro_id)
             .execute()
         )
@@ -314,7 +392,7 @@ if pesquisar:
 
 # Filtro por status de localização
 st.subheader("🔖 Status da localização")
-opcoes_status = ["Todos", "Com coordenadas", "Sem dados"]
+opcoes_status = ["Todos", "Com localização", "Sem dados"]
 status_sel = st.selectbox("Filtrar por status", opcoes_status, index=0)
 
 # =====================================
@@ -333,10 +411,17 @@ def tem_coord(r):
     except Exception:
         return False
 
-if status_sel == "Com coordenadas":
-    resultado = [r for r in resultado if tem_coord(r)]
+
+def tem_link_maps(r):
+    try:
+        return bool(str(r.get("link_maps") or "").strip())
+    except Exception:
+        return False
+
+if status_sel == "Com localização":
+    resultado = [r for r in resultado if tem_coord(r) or tem_link_maps(r)]
 elif status_sel == "Sem dados":
-    resultado = [r for r in resultado if not tem_coord(r)]
+    resultado = [r for r in resultado if not tem_coord(r) and not tem_link_maps(r)]
 
 if resultado:
     for idx, row in enumerate(resultado):
@@ -348,73 +433,91 @@ if resultado:
 
         lat = row.get("latitude")
         lon = row.get("longitude")
-        has_coord = lat not in (None, "") and lon not in (None, "")
+        link_maps = str(row.get("link_maps") or "").strip()
+        has_coord = lat is not None and lon is not None and str(lat).strip() != "" and str(lon).strip() != ""
+        has_link = bool(link_maps)
+        has_location = has_coord or has_link
 
-        if has_coord:
-            st.markdown("✅ Status: Com coordenadas")
-            st.markdown(f"🌍 **Coordenada atual:** {lat}, {lon}")
-            url_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            st.link_button("🗺️ Abrir no Google Maps", url_maps, type="primary", use_container_width=True)
+        if has_location:
+            st.markdown("✅ Status: Com localização")
+            if has_coord:
+                st.markdown(f"🌍 **Coordenada atual:** {lat}, {lon}")
 
-            # Editar coordenada existente
-            st.markdown("#### ✏️ Editar coordenada")
-            opcao_editar = st.radio(
-                "Escolha o método:",
-                ["Capturar GPS do dispositivo", "Inserir manualmente"],
-                key=f"opcao_editar_{idx}"
-            )
+            url_maps = montar_url_maps(lat, lon, link_maps)
+            if url_maps:
+                st.link_button("🗺️ Abrir no Google Maps", url_maps, type="primary", use_container_width=True)
 
-            if opcao_editar == "Capturar GPS do dispositivo":
-                loc = get_geolocation()
-                if loc:
-                    new_lat, new_lon = loc["coords"]["latitude"], loc["coords"]["longitude"]
-                    st.success(f"Coordenada detectada: ({new_lat}, {new_lon})")
-                    if st.button("Salvar coordenada", key=f"gps_editar_{idx}"):
-                        if atualizar_coordenada(row["id"], float(new_lat), float(new_lon)):
-                            atualizar_resultado_em_sessao(row["id"], float(new_lat), float(new_lon))
-                            st.success("Coordenada atualizada com sucesso!")
-                            st.rerun()
-            else:
-                coord_input_edit = st.text_input(
-                    "Cole um link do Google Maps ou as coordenadas:",
-                    key=f"manual_editar_{idx}"
-                )
-                if st.button("Salvar coordenada", key=f"salvar_editar_{idx}"):
-                    new_lat, new_lon = extrair_coordenadas(coord_input_edit)
-                    if new_lat is not None and new_lon is not None:
-                        if atualizar_coordenada(row["id"], float(new_lat), float(new_lon)):
-                            atualizar_resultado_em_sessao(row["id"], float(new_lat), float(new_lon))
-                            st.success("Coordenada atualizada com sucesso!")
-                            st.rerun()
-                    else:
-                        st.error("Formato inválido. Informe coordenadas decimais (ex.: -22.3577,-47.3627) ou um link que contenha essas coordenadas.")
+            st.markdown("#### ✏️ Atualizar localização")
         else:
             st.markdown("⬜ Status: Sem dados")
-            st.markdown("#### ➕ Inserir coordenada")
-            opcao = st.radio("Escolha o método:", ["Capturar GPS do celular", "Inserir manualmente"], key=f"opcao_{idx}")
+            st.markdown("#### ➕ Inserir localização")
 
-            if opcao == "Capturar GPS do celular":
-                loc = get_geolocation()
-                if loc:
-                    lat_gps, lon_gps = loc["coords"]["latitude"], loc["coords"]["longitude"]
-                    st.success(f"Coordenada detectada: ({lat_gps}, {lon_gps})")
-                    if st.button("Salvar coordenada", key=f"gps_{idx}"):
-                        if atualizar_coordenada(row["id"], float(lat_gps), float(lon_gps)):
-                            atualizar_resultado_em_sessao(row["id"], float(lat_gps), float(lon_gps))
-                            st.success("Coordenada salva com sucesso!")
-                            st.rerun()
+        opcao_localizacao = st.radio(
+            "Escolha o método:",
+            [
+                "Capturar GPS do dispositivo",
+                "Inserir coordenadas manualmente",
+                "Colar link do Google Maps",
+            ],
+            key=f"opcao_localizacao_{idx}",
+        )
 
-            elif opcao == "Inserir manualmente":
-                coord_input = st.text_input("Cole um link do Google Maps ou coordenada:", key=f"manual_{idx}")
-                if st.button("Salvar coordenada", key=f"salvar_{idx}"):
-                    lat_m, lon_m = extrair_coordenadas(coord_input)
-                    if lat_m is not None and lon_m is not None:
-                        if atualizar_coordenada(row["id"], float(lat_m), float(lon_m)):
-                            atualizar_resultado_em_sessao(row["id"], float(lat_m), float(lon_m))
-                            st.success("Coordenada salva com sucesso!")
-                            st.rerun()
-                    else:
-                        st.error("Formato inválido. Informe coordenadas decimais (ex.: -22.3577,-47.3627) ou um link que contenha essas coordenadas.")
+        if opcao_localizacao == "Capturar GPS do dispositivo":
+            loc = get_geolocation()
+            if loc:
+                lat_gps, lon_gps = loc["coords"]["latitude"], loc["coords"]["longitude"]
+                st.success(f"Coordenada detectada: ({lat_gps}, {lon_gps})")
+                if st.button("Salvar localização", key=f"salvar_gps_{idx}"):
+                    if atualizar_localizacao(row["id"], float(lat_gps), float(lon_gps), None):
+                        atualizar_resultado_em_sessao(row["id"], float(lat_gps), float(lon_gps), None)
+                        st.success("Localização salva com sucesso!")
+                        st.rerun()
+
+        elif opcao_localizacao == "Inserir coordenadas manualmente":
+            coord_input = st.text_input(
+                "Informe latitude e longitude:",
+                key=f"manual_localizacao_{idx}",
+            )
+            if st.button("Salvar localização", key=f"salvar_manual_{idx}"):
+                localizacao_manual = resolver_localizacao_manual(coord_input)
+                lat_manual = localizacao_manual["latitude"]
+                lon_manual = localizacao_manual["longitude"]
+
+                if localizacao_manual["erro"] or lat_manual is None or lon_manual is None:
+                    st.error(
+                        localizacao_manual["erro"]
+                        or "Não foi possível interpretar a localização. Informe coordenadas válidas ou cole um link do Google Maps."
+                    )
+                else:
+                    if atualizar_localizacao(row["id"], float(lat_manual), float(lon_manual), None):
+                        atualizar_resultado_em_sessao(row["id"], float(lat_manual), float(lon_manual), None)
+                        st.success("Localização salva com sucesso!")
+                        st.rerun()
+
+        elif opcao_localizacao == "Colar link do Google Maps":
+            link_input = st.text_input(
+                "Cole o link do Google Maps:",
+                key=f"link_localizacao_{idx}",
+            )
+            if st.button("Salvar localização", key=f"salvar_link_{idx}"):
+                if not eh_url_maps(link_input):
+                    st.error("Cole um link válido do Google Maps.")
+                else:
+                    localizacao_link = resolver_localizacao_manual(link_input)
+                    if atualizar_localizacao(
+                        row["id"],
+                        localizacao_link["latitude"],
+                        localizacao_link["longitude"],
+                        localizacao_link["link_maps"],
+                    ):
+                        atualizar_resultado_em_sessao(
+                            row["id"],
+                            localizacao_link["latitude"],
+                            localizacao_link["longitude"],
+                            localizacao_link["link_maps"],
+                        )
+                        st.success("Localização salva com sucesso!")
+                        st.rerun()
 else:
     if pesquisa_realizada:
         if cidade_pesquisa == "Todas":
@@ -434,9 +537,6 @@ if "novo_cliente" in st.session_state:
     novo_medidor = st.text_input("Número do Medidor")
     novo_nome = st.text_input("Nome do cliente")
     novo_endereco = st.text_input("Endereço")
-    nova_lat = st.text_input("Latitude (opcional)")
-    nova_lon = st.text_input("Longitude (opcional)")
-    coord_livre = st.text_input("Coordenadas (link/decimal) - opcional")
 
     # Cidade
     if cidade == "Todas":
@@ -448,28 +548,82 @@ if "novo_cliente" in st.session_state:
     else:
         cidade_novo = cidade
 
-    if st.button("Salvar novo cliente"):
-        # Extrai coordenadas prioritariamente do campo livre
-        lat_final, lon_final = None, None
-        if coord_livre:
-            lat_final, lon_final = extrair_coordenadas(coord_livre)
-        if (lat_final is None or lon_final is None) and (nova_lat or nova_lon):
-            try:
-                lat_final = float(str(nova_lat).replace(',', '.')) if nova_lat else None
-                lon_final = float(str(nova_lon).replace(',', '.')) if nova_lon else None
-            except Exception:
-                lat_final, lon_final = None, None
+    st.markdown("#### 📍 Localização da unidade")
+    metodo_localizacao_novo = st.radio(
+        "Como deseja informar a localização?",
+        [
+            "Capturar GPS do dispositivo",
+            "Inserir coordenadas manualmente",
+            "Colar link do Google Maps",
+        ],
+        key="metodo_localizacao_novo",
+    )
 
-        ok = cadastrar_unidade({
-            "cidade": cidade_novo,
-            "uc": nova_uc,
-            "medidor": novo_medidor,
-            "cliente": novo_nome,
-            "endereco": novo_endereco,
-            "latitude": lat_final,
-            "longitude": lon_final,
-        })
-        if ok:
-            st.success("Cliente cadastrado com sucesso!")
-            del st.session_state["novo_cliente"]
-            st.rerun()
+    lat_final = None
+    lon_final = None
+    link_maps_final = None
+    erro_localizacao_novo = None
+
+    if metodo_localizacao_novo == "Capturar GPS do dispositivo":
+        loc_novo = get_geolocation()
+        if loc_novo:
+            lat_final = float(loc_novo["coords"]["latitude"])
+            lon_final = float(loc_novo["coords"]["longitude"])
+            st.success(f"Coordenada detectada: ({lat_final}, {lon_final})")
+        else:
+            st.info("Permita o acesso à localização para capturar o GPS do dispositivo.")
+
+    elif metodo_localizacao_novo == "Inserir coordenadas manualmente":
+        localizacao_manual_novo = st.text_input(
+            "Informe latitude e longitude:",
+            key="localizacao_manual_novo",
+        )
+        if localizacao_manual_novo.strip():
+            resolucao_manual_novo = resolver_localizacao_manual(localizacao_manual_novo)
+            erro_localizacao_novo = resolucao_manual_novo["erro"]
+            lat_final = resolucao_manual_novo["latitude"]
+            lon_final = resolucao_manual_novo["longitude"]
+
+    elif metodo_localizacao_novo == "Colar link do Google Maps":
+        link_maps_novo = st.text_input(
+            "Cole o link do Google Maps:",
+            key="link_maps_novo",
+        )
+        if link_maps_novo.strip():
+            if not eh_url_maps(link_maps_novo):
+                erro_localizacao_novo = "Cole um link válido do Google Maps."
+            else:
+                resolucao_link_novo = resolver_localizacao_manual(link_maps_novo)
+                erro_localizacao_novo = resolucao_link_novo["erro"]
+                lat_final = resolucao_link_novo["latitude"]
+                lon_final = resolucao_link_novo["longitude"]
+                link_maps_final = resolucao_link_novo["link_maps"]
+
+    if st.button("Salvar novo cliente"):
+        if metodo_localizacao_novo == "Capturar GPS do dispositivo":
+            localizacao_valida = lat_final is not None and lon_final is not None
+        elif metodo_localizacao_novo == "Inserir coordenadas manualmente":
+            localizacao_valida = erro_localizacao_novo is None and lat_final is not None and lon_final is not None
+        else:
+            localizacao_valida = erro_localizacao_novo is None and bool(str(link_maps_final or "").strip())
+
+        if not localizacao_valida:
+            if erro_localizacao_novo:
+                st.error(erro_localizacao_novo)
+            else:
+                st.error("Informe a localização da unidade por GPS, coordenadas manuais ou link do Google Maps.")
+        else:
+            ok = cadastrar_unidade({
+                "cidade": cidade_novo,
+                "uc": nova_uc,
+                "medidor": novo_medidor,
+                "cliente": novo_nome,
+                "endereco": novo_endereco,
+                "latitude": lat_final,
+                "longitude": lon_final,
+                "link_maps": link_maps_final,
+            })
+            if ok:
+                st.success("Cliente cadastrado com sucesso!")
+                del st.session_state["novo_cliente"]
+                st.rerun()
