@@ -131,10 +131,34 @@ def extrair_coordenadas(texto):
 
 def listar_cidades() -> List[str]:
     try:
-        res = supabase.table(TABELA).select("cidade").order("cidade").execute()
-        cidades = [r.get("cidade") for r in (res.data or []) if r.get("cidade")]
-        # unique e ordenado
-        return sorted(set(cidades))
+        cidades = set()
+        tamanho_lote = 1000
+        inicio = 0
+
+        while True:
+            fim = inicio + tamanho_lote - 1
+
+            res = (
+                supabase
+                .table(TABELA)
+                .select("cidade")
+                .range(inicio, fim)
+                .execute()
+            )
+
+            registros = res.data or []
+
+            for registro in registros:
+                cidade = str(registro.get("cidade", "")).strip()
+                if cidade:
+                    cidades.add(cidade)
+
+            if len(registros) < tamanho_lote:
+                break
+
+            inicio += tamanho_lote
+
+        return sorted(cidades)
     except Exception as e:
         st.error(f"Erro ao listar cidades: {e}")
         return []
