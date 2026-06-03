@@ -2,7 +2,6 @@ import streamlit as st
 import re
 from typing import Optional, List, Dict
 from urllib.parse import unquote, quote_plus
-from urllib.parse import urlparse
 from datetime import datetime, timezone
 from streamlit_js_eval import get_geolocation
 from supabase import create_client
@@ -32,18 +31,6 @@ supabase = create_client(
     supabase_url,
     supabase_key,
 )
-supabase_host = urlparse(supabase_url).netloc
-st.caption(f"🔧 Diagnóstico temporário — Supabase ativo: {supabase_host}")
-
-if "debug_cadastro" in st.session_state:
-    with st.expander("🔧 Diagnóstico temporário do último cadastro", expanded=True):
-        st.write("DEBUG — payload enviado:", st.session_state["debug_cadastro"].get("payload"))
-        st.write("DEBUG — retorno do INSERT:", st.session_state["debug_cadastro"].get("retorno_insert"))
-        st.write("DEBUG — confirmação após INSERT:", st.session_state["debug_cadastro"].get("confirmacao"))
-
-        if st.button("Limpar diagnóstico temporário"):
-            del st.session_state["debug_cadastro"]
-            st.rerun()
 
 TABELA = "unidades_consumidoras"
 
@@ -240,24 +227,12 @@ def cadastrar_unidade(dados: Dict) -> bool:
             "longitude": dados.get("longitude"),
         }
 
-        st.session_state["debug_cadastro"] = {
-            "payload": payload,
-            "retorno_insert": None,
-            "confirmacao": None,
-        }
-
-        st.write("DEBUG — payload enviado:", payload)
-
         resposta_insert = (
             supabase
             .table(TABELA)
             .insert(payload)
             .execute()
         )
-
-        st.session_state["debug_cadastro"]["retorno_insert"] = resposta_insert.data
-
-        st.write("DEBUG — retorno do INSERT:", resposta_insert.data)
 
         if not resposta_insert.data:
             st.error("O Supabase não confirmou a inserção do cliente.")
@@ -277,10 +252,6 @@ def cadastrar_unidade(dados: Dict) -> bool:
             .eq("id", registro_id)
             .execute()
         )
-
-        st.session_state["debug_cadastro"]["confirmacao"] = resposta_confirmacao.data
-
-        st.write("DEBUG — confirmação após INSERT:", resposta_confirmacao.data)
 
         if not resposta_confirmacao.data:
             st.error("O INSERT foi executado, mas a consulta de confirmação não encontrou o registro.")
