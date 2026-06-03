@@ -20,7 +20,6 @@ st.html("""<style>
 </style>""")
 
 st.title("📍 Localizador de UCs")
-st.caption("Consulte e atualize coordenadas pelo medidor ou UC.")
 
 # =====================================
 # SUPABASE CLIENTE
