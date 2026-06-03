@@ -18,11 +18,21 @@ st.caption("Consulte e atualize coordenadas geográficas de clientes pelo númer
 # =====================================
 # SUPABASE CLIENTE
 # =====================================
+missing_secrets = [key for key in ("SUPABASE_URL", "SUPABASE_KEY") if key not in st.secrets]
+
+if missing_secrets:
+    st.error("Configuração do Supabase ausente no Streamlit Cloud.")
+    st.info("Adicione `SUPABASE_URL` e `SUPABASE_KEY` em `Manage app` -> `Settings` -> `Secrets`.")
+    st.stop()
+
+supabase_url = st.secrets["SUPABASE_URL"]
+supabase_key = st.secrets["SUPABASE_KEY"]
+
 supabase = create_client(
-    st.secrets["SUPABASE_URL"],
-    st.secrets["SUPABASE_KEY"],
+    supabase_url,
+    supabase_key,
 )
-supabase_host = urlparse(st.secrets["SUPABASE_URL"]).netloc
+supabase_host = urlparse(supabase_url).netloc
 st.caption(f"🔧 Diagnóstico temporário — Supabase ativo: {supabase_host}")
 
 if "debug_cadastro" in st.session_state:
@@ -121,10 +131,34 @@ def extrair_coordenadas(texto):
 
 def listar_cidades() -> List[str]:
     try:
-        res = supabase.table(TABELA).select("cidade").order("cidade").execute()
-        cidades = [r.get("cidade") for r in (res.data or []) if r.get("cidade")]
-        # unique e ordenado
-        return sorted(set(cidades))
+        cidades = set()
+        tamanho_lote = 1000
+        inicio = 0
+
+        while True:
+            fim = inicio + tamanho_lote - 1
+
+            res = (
+                supabase
+                .table(TABELA)
+                .select("cidade")
+                .range(inicio, fim)
+                .execute()
+            )
+
+            registros = res.data or []
+
+            for registro in registros:
+                cidade = str(registro.get("cidade", "")).strip()
+                if cidade:
+                    cidades.add(cidade)
+
+            if len(registros) < tamanho_lote:
+                break
+
+            inicio += tamanho_lote
+
+        return sorted(cidades)
     except Exception as e:
         st.error(f"Erro ao listar cidades: {e}")
         return []
@@ -263,10 +297,38 @@ st.subheader("🔹 Escolha a cidade")
 lista_cidades = ["Todas"] + listar_cidades()
 cidade = st.selectbox("Selecione a cidade", lista_cidades, index=0)
 
-# Campo de busca automática (sem botão)
+# Campo de busca com botão
 st.subheader("🔎 Localizar cliente")
-busca_text = st.text_input("Digite o número do medidor ou da unidade consumidora", value=st.session_state.get("busca_text", ""))
-st.session_state["busca_text"] = busca_text
+if "termo_pesquisa" not in st.session_state:
+    st.session_state["termo_pesquisa"] = ""
+if "termo_pesquisa_input" not in st.session_state:
+    st.session_state["termo_pesquisa_input"] = st.session_state["termo_pesquisa"]
+if "resultados_pesquisa" not in st.session_state:
+    st.session_state["resultados_pesquisa"] = []
+if "pesquisa_realizada" not in st.session_state:
+    st.session_state["pesquisa_realizada"] = False
+if "cidade_pesquisa" not in st.session_state:
+    st.session_state["cidade_pesquisa"] = "Todas"
+
+termo_digitado = st.text_input(
+    "Digite o número do medidor ou da unidade consumidora",
+    key="termo_pesquisa_input",
+)
+pesquisar = st.button(
+    "🔎 Pesquisar",
+    use_container_width=True,
+)
+
+if pesquisar:
+    termo = termo_digitado.strip()
+
+    if not termo:
+        st.warning("Informe uma UC ou um número de medidor antes de pesquisar.")
+    else:
+        st.session_state["termo_pesquisa"] = termo
+        st.session_state["resultados_pesquisa"] = buscar_unidades(cidade, termo)
+        st.session_state["pesquisa_realizada"] = True
+        st.session_state["cidade_pesquisa"] = cidade
 
 # Filtro por status de localização
 st.subheader("🔖 Status da localização")
@@ -276,23 +338,23 @@ status_sel = st.selectbox("Filtrar por status", opcoes_status, index=0)
 # =====================================
 # RESULTADOS
 # =====================================
-resultado = []
-if busca_text.strip():
-    resultado = buscar_unidades(cidade, busca_text)
+resultado = st.session_state.get("resultados_pesquisa", [])
+pesquisa_realizada = st.session_state.get("pesquisa_realizada", False)
+cidade_pesquisa = st.session_state.get("cidade_pesquisa", cidade)
 
-    # Aplica filtro de status no cliente
-    def tem_coord(r):
-        lat = r.get("latitude")
-        lon = r.get("longitude")
-        try:
-            return lat is not None and lon is not None and str(lat).strip() != "" and str(lon).strip() != ""
-        except Exception:
-            return False
+# Aplica filtro de status no cliente
+def tem_coord(r):
+    lat = r.get("latitude")
+    lon = r.get("longitude")
+    try:
+        return lat is not None and lon is not None and str(lat).strip() != "" and str(lon).strip() != ""
+    except Exception:
+        return False
 
-    if status_sel == "Com coordenadas":
-        resultado = [r for r in resultado if tem_coord(r)]
-    elif status_sel == "Sem dados":
-        resultado = [r for r in resultado if not tem_coord(r)]
+if status_sel == "Com coordenadas":
+    resultado = [r for r in resultado if tem_coord(r)]
+elif status_sel == "Sem dados":
+    resultado = [r for r in resultado if not tem_coord(r)]
 
 if resultado:
     for idx, row in enumerate(resultado):
@@ -374,13 +436,13 @@ if resultado:
                     else:
                         st.error("Formato inválido. Informe coordenadas decimais (ex.: -22.3577,-47.3627) ou um link que contenha essas coordenadas.")
 else:
-    if busca_text.strip() != "":
-        if cidade == "Todas":
+    if pesquisa_realizada:
+        if cidade_pesquisa == "Todas":
             st.warning("Cliente não encontrado.")
         else:
             st.warning("Cliente não encontrado nesta cidade.")
         if st.button("Cadastrar novo cliente"):
-            st.session_state["novo_cliente"] = busca_text
+            st.session_state["novo_cliente"] = st.session_state.get("termo_pesquisa", "")
 
 # =====================================
 # CADASTRO DE NOVO CLIENTE
