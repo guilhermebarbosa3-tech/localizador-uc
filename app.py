@@ -301,6 +301,8 @@ cidade = st.selectbox("Selecione a cidade", lista_cidades, index=0)
 st.subheader("🔎 Localizar cliente")
 if "termo_pesquisa" not in st.session_state:
     st.session_state["termo_pesquisa"] = ""
+if "termo_pesquisa_input" not in st.session_state:
+    st.session_state["termo_pesquisa_input"] = st.session_state["termo_pesquisa"]
 if "resultados_pesquisa" not in st.session_state:
     st.session_state["resultados_pesquisa"] = []
 if "pesquisa_realizada" not in st.session_state:
@@ -308,15 +310,14 @@ if "pesquisa_realizada" not in st.session_state:
 if "cidade_pesquisa" not in st.session_state:
     st.session_state["cidade_pesquisa"] = "Todas"
 
-with st.form("form_pesquisa"):
-    termo_digitado = st.text_input(
-        "Digite o número do medidor ou da unidade consumidora",
-        value=st.session_state.get("termo_pesquisa", ""),
-    )
-    pesquisar = st.form_submit_button(
-        "🔎 Pesquisar",
-        use_container_width=True,
-    )
+termo_digitado = st.text_input(
+    "Digite o número do medidor ou da unidade consumidora",
+    key="termo_pesquisa_input",
+)
+pesquisar = st.button(
+    "🔎 Pesquisar",
+    use_container_width=True,
+)
 
 if pesquisar:
     termo = termo_digitado.strip()
