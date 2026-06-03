@@ -404,9 +404,7 @@ if pesquisar:
         st.session_state["cidade_pesquisa"] = cidade
 
 # Filtro por status de localização
-st.subheader("🔖 Status da localização")
-opcoes_status = ["Todos", "Com localização", "Sem dados"]
-status_sel = st.selectbox("Filtrar por status", opcoes_status, index=0)
+status_sel = "Todos"
 
 # =====================================
 # RESULTADOS
