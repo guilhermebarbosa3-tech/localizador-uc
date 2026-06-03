@@ -181,6 +181,17 @@ def atualizar_coordenada(reg_id: int, latitude: float, longitude: float) -> bool
         return False
 
 
+def atualizar_resultado_em_sessao(reg_id, latitude, longitude):
+    resultados = st.session_state.get("resultados_pesquisa", [])
+    for registro in resultados:
+        if registro.get("id") == reg_id:
+            registro["latitude"] = latitude
+            registro["longitude"] = longitude
+            registro["atualizado_em"] = datetime.now(timezone.utc).isoformat()
+            break
+    st.session_state["resultados_pesquisa"] = resultados
+
+
 def cadastrar_unidade_original(dados: Dict) -> bool:
     # Validação obrigatória
     obrigatorios = ["cidade", "uc", "cliente"]
@@ -360,6 +371,7 @@ if resultado:
                     st.success(f"Coordenada detectada: ({new_lat}, {new_lon})")
                     if st.button("Salvar coordenada", key=f"gps_editar_{idx}"):
                         if atualizar_coordenada(row["id"], float(new_lat), float(new_lon)):
+                            atualizar_resultado_em_sessao(row["id"], float(new_lat), float(new_lon))
                             st.success("Coordenada atualizada com sucesso!")
                             st.rerun()
             else:
@@ -371,18 +383,13 @@ if resultado:
                     new_lat, new_lon = extrair_coordenadas(coord_input_edit)
                     if new_lat is not None and new_lon is not None:
                         if atualizar_coordenada(row["id"], float(new_lat), float(new_lon)):
+                            atualizar_resultado_em_sessao(row["id"], float(new_lat), float(new_lon))
                             st.success("Coordenada atualizada com sucesso!")
                             st.rerun()
                     else:
                         st.error("Formato inválido. Informe coordenadas decimais (ex.: -22.3577,-47.3627) ou um link que contenha essas coordenadas.")
         else:
             st.markdown("⬜ Status: Sem dados")
-            # Sugerir busca do endereço no Maps
-            endereco_busca = f"{row.get('endereco','')} {row.get('cidade','')}".strip()
-            if endereco_busca:
-                url_maps_busca = f"https://www.google.com/maps/search/?api=1&query={quote_plus(endereco_busca)}"
-                st.link_button("🔎 Buscar endereço no Google Maps", url_maps_busca, use_container_width=True)
-
             st.markdown("#### ➕ Inserir coordenada")
             opcao = st.radio("Escolha o método:", ["Capturar GPS do celular", "Inserir manualmente"], key=f"opcao_{idx}")
 
@@ -393,6 +400,7 @@ if resultado:
                     st.success(f"Coordenada detectada: ({lat_gps}, {lon_gps})")
                     if st.button("Salvar coordenada", key=f"gps_{idx}"):
                         if atualizar_coordenada(row["id"], float(lat_gps), float(lon_gps)):
+                            atualizar_resultado_em_sessao(row["id"], float(lat_gps), float(lon_gps))
                             st.success("Coordenada salva com sucesso!")
                             st.rerun()
 
@@ -402,6 +410,7 @@ if resultado:
                     lat_m, lon_m = extrair_coordenadas(coord_input)
                     if lat_m is not None and lon_m is not None:
                         if atualizar_coordenada(row["id"], float(lat_m), float(lon_m)):
+                            atualizar_resultado_em_sessao(row["id"], float(lat_m), float(lon_m))
                             st.success("Coordenada salva com sucesso!")
                             st.rerun()
                     else:
