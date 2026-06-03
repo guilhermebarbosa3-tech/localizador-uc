@@ -2,6 +2,7 @@ import streamlit as st
 import re
 from typing import Optional, List, Dict
 from urllib.parse import unquote, quote_plus
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 from streamlit_js_eval import get_geolocation
 from supabase import create_client
@@ -21,6 +22,18 @@ supabase = create_client(
     st.secrets["SUPABASE_URL"],
     st.secrets["SUPABASE_KEY"],
 )
+supabase_host = urlparse(st.secrets["SUPABASE_URL"]).netloc
+st.caption(f"🔧 Diagnóstico temporário — Supabase ativo: {supabase_host}")
+
+if "debug_cadastro" in st.session_state:
+    with st.expander("🔧 Diagnóstico temporário do último cadastro", expanded=True):
+        st.write("DEBUG — payload enviado:", st.session_state["debug_cadastro"].get("payload"))
+        st.write("DEBUG — retorno do INSERT:", st.session_state["debug_cadastro"].get("retorno_insert"))
+        st.write("DEBUG — confirmação após INSERT:", st.session_state["debug_cadastro"].get("confirmacao"))
+
+        if st.button("Limpar diagnóstico temporário"):
+            del st.session_state["debug_cadastro"]
+            st.rerun()
 
 TABELA = "unidades_consumidoras"
 
@@ -147,7 +160,7 @@ def atualizar_coordenada(reg_id: int, latitude: float, longitude: float) -> bool
         return False
 
 
-def cadastrar_unidade(dados: Dict) -> bool:
+def cadastrar_unidade_original(dados: Dict) -> bool:
     # Validação obrigatória
     obrigatorios = ["cidade", "uc", "cliente"]
     faltando = [c for c in obrigatorios if not str(dados.get(c, "")).strip()]
@@ -173,6 +186,77 @@ def cadastrar_unidade(dados: Dict) -> bool:
 # =====================================
 # INTERFACE PRINCIPAL
 # =====================================
+
+def cadastrar_unidade(dados: Dict) -> bool:
+    obrigatorios = ["cidade", "uc", "cliente"]
+    faltando = [c for c in obrigatorios if not str(dados.get(c, "")).strip()]
+
+    if faltando:
+        st.error("Preencha os campos obrigatórios: cidade, UC e cliente.")
+        return False
+
+    try:
+        payload = {
+            "cidade": str(dados.get("cidade", "")).strip(),
+            "uc": str(dados.get("uc", "")).strip(),
+            "medidor": str(dados.get("medidor", "")).strip(),
+            "cliente": str(dados.get("cliente", "")).strip(),
+            "endereco": str(dados.get("endereco", "")).strip(),
+            "latitude": dados.get("latitude"),
+            "longitude": dados.get("longitude"),
+        }
+
+        st.session_state["debug_cadastro"] = {
+            "payload": payload,
+            "retorno_insert": None,
+            "confirmacao": None,
+        }
+
+        st.write("DEBUG — payload enviado:", payload)
+
+        resposta_insert = (
+            supabase
+            .table(TABELA)
+            .insert(payload)
+            .execute()
+        )
+
+        st.session_state["debug_cadastro"]["retorno_insert"] = resposta_insert.data
+
+        st.write("DEBUG — retorno do INSERT:", resposta_insert.data)
+
+        if not resposta_insert.data:
+            st.error("O Supabase não confirmou a inserção do cliente.")
+            return False
+
+        registro_inserido = resposta_insert.data[0]
+        registro_id = registro_inserido.get("id")
+
+        if not registro_id:
+            st.error("O INSERT retornou dados, mas não retornou o ID do registro.")
+            return False
+
+        resposta_confirmacao = (
+            supabase
+            .table(TABELA)
+            .select("id,cidade,uc,medidor,cliente")
+            .eq("id", registro_id)
+            .execute()
+        )
+
+        st.session_state["debug_cadastro"]["confirmacao"] = resposta_confirmacao.data
+
+        st.write("DEBUG — confirmação após INSERT:", resposta_confirmacao.data)
+
+        if not resposta_confirmacao.data:
+            st.error("O INSERT foi executado, mas a consulta de confirmação não encontrou o registro.")
+            return False
+
+        return True
+
+    except Exception as e:
+        st.error(f"Erro ao cadastrar unidade no Supabase: {e}")
+        return False
 
 # Seletor de cidades
 st.subheader("🔹 Escolha a cidade")
