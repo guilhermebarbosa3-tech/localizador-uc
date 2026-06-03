@@ -391,7 +391,6 @@ with _col_btn:
         use_container_width=True,
         help="Pesquisar",
     )
-st.caption("Digite o número do medidor ou da unidade consumidora")
 
 if pesquisar:
     termo = termo_digitado.strip()
