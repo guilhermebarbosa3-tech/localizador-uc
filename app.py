@@ -378,14 +378,21 @@ if "pesquisa_realizada" not in st.session_state:
 if "cidade_pesquisa" not in st.session_state:
     st.session_state["cidade_pesquisa"] = "Todas"
 
-termo_digitado = st.text_input(
-    "Digite o número do medidor ou da unidade consumidora",
-    key="termo_pesquisa_input",
-)
-pesquisar = st.button(
-    "🔎 Pesquisar",
-    use_container_width=True,
-)
+_col_input, _col_btn = st.columns([4, 1])
+with _col_input:
+    termo_digitado = st.text_input(
+        "Digite o número do medidor ou da unidade consumidora",
+        key="termo_pesquisa_input",
+        label_visibility="collapsed",
+        placeholder="UC ou número do medidor",
+    )
+with _col_btn:
+    pesquisar = st.button(
+        "🔎",
+        use_container_width=True,
+        help="Pesquisar",
+    )
+st.caption("Digite o número do medidor ou da unidade consumidora")
 
 if pesquisar:
     termo = termo_digitado.strip()
